@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>sandbox</title>
+	<meta charset="utf-8">
+</head>
+<body>
+<style>
+
+</style>
+<div id="examples">Примеры:
+	<div>
+		<b>Smart-MC0101 РП_rev 05:</b><br>
+		<button onclick="load_example(0)">Пакет с текущим состоянием</button>
+	</div>
+	<div>
+		<b>ВЕГА СИ-12 РП_rev 15:</b><br>
+	</div>	
+</div>
+<div><b>Data</b></div>
+<input type="text" name="" id="data">
+<label for="data">Data</label>
+ <table>
+  <tr>
+    <th>JSON</th>
+    <th>JS</th>
+  </tr>
+  <tr>
+    <td><textarea id="json" rows="25" cols="50"></textarea></td>
+    <td><textarea id="js" rows="25" cols="50"></textarea><br></td>
+  </tr>
+</table>
+<button id="button" onclick="convert_and_run()">Сконвертировать и запустить</button>
+<div><b>Output:</b></div>
+<div id="output"></div>
+<div><b>Инструкция:</b></div>
+<script>
+	document.getElementById('json').addEventListener('keydown', function(e) {
+  if (e.key == 'Tab') {
+    e.preventDefault();
+    var start = this.selectionStart;
+    var end = this.selectionEnd;
+
+    // set textarea value to: text before caret + tab + text after caret
+    this.value = this.value.substring(0, start) +
+      "    " + this.value.substring(end);
+
+    // put caret at right position again
+    this.selectionStart =
+      this.selectionEnd = start + 4;
+  }
+});
+const fromHexString = (hexString) =>
+  Uint8Array.from(hexString.match(/.{1,2}/g).map((byte) => parseInt(byte, 16)));
+const isHex = (maybeHex) =>
+  maybeHex.length !== 0 && maybeHex.length % 2 === 0 && !/[^a-fA-F0-9]/u.test(maybeHex);
+
+function load_example(index){
+ examples = [
+ {data:"0163002C010101FF49A362", json:
+ `{
+	"type":"uint8",
+	"battery":"uint8",
+	"!skip!":"uint8",
+	"temp":"int16/le",
+        "reason":"uint8",
+	"":
+	{"bits":"uint8",
+	"":[
+	["getBit(0) == 1",[ ["sensor1",true]],[["sensor1",false]]],
+	["getBit(1) == 1",[["sensor2",true]],[["sensor2",false]]]
+	]
+	},
+	"time":"uint32/le",
+        "!FixTemp!":"obj.temp /= 10;"
+}`}]
+ document.getElementById("data").value = examples[index]["data"]
+ document.getElementById("json").value = examples[index]["json"]
+}
+function show_error(error){
+	alert(error);
+}
+function convert_and_run(){
+	let code = `function getType(data,type,offset,endian=false){
+  				return new DataView(new Uint8Array(data).buffer)[type](offset,endian)
+				}`;
+	let json = {};
+	let data = [];
+	const nameDict = new Map([
+			["uint8",["getUint8",1] ],
+			["bigInt64",["getBigInt64",8] ],
+			["bigUint64",["getBigUint64",8] ],
+			["float32",["getFloat32",4] ],
+			["float64",["getFloat64",8] ],
+			["int16",["getInt16",2] ],
+			["int32",["getInt32",4] ],
+			["int8",["getInt8",1] ],
+			["uint16",["getUint16",2] ],
+			["uint32",["getUint32",4] ]
+			]);
+	function typeNameToType(typeName,trace){
+		
+		if(nameDict.has(typeName)){return nameDict.get(typeName);}
+		//else{show_error(`unknown type: ${typeName} at ${trace.join(">")}`);return ["error",1]}
+		else{throw new TypeError(`unknown type: ${typeName} at ${trace.join(">")}`)}
+	}
+	try{
+		json = JSON.parse(document.getElementById("json").value)
+	}
+	catch(e){
+		show_error(e.message)
+	}
+	if(isHex(document.getElementById("data").value)){
+		data = fromHexString(document.getElementById("data").value)
+	}
+	else{
+		show_error("data is not hex string")
+		return;
+	}
+	
+	function nameToParams(name){
+		let temp = name.split("/");
+		let bool = false;
+		if(temp[1] === "le"){bool = true;}
+		return `"${nameDict.get(temp[0])[0]}",${bool},${nameDict.get(temp[0])[1]}`;
+	}
+	function node(parent,type,children){
+			this.parent = parent;
+			this.type = type;
+			this.children = children;
+		}
+	const ast = new node(undefined,"root",[]);
+	let currentNode = ast;
+	let insideOfAssignment = false;
+	function error(err){
+		console.log(err);
+	}
+	function process(thing){
+		for(const element in thing){
+			if(typeof(thing[element]) === typeof({})){
+				if(thing[element] instanceof Array){
+					/*if*/
+					if(typeof(thing[element][0]) === typeof("")){
+						if(thing[element][0].includes("=") || thing[element][0].includes(">") || thing[element][0].includes("<") || thing[element][0].includes("!")){
+							currentNode.children.push(new node(currentNode,"if",[]));
+							currentNode = currentNode.children[currentNode.children.length-1];
+							currentNode.children.push(new node(currentNode,"condition",[]));
+							currentNode.children[currentNode.children.length-1].condition = thing[element][0];
+							currentNode.children.push(new node(currentNode,"trueBranch",[]));
+							currentNode = currentNode.children[currentNode.children.length-1];
+							process(thing[element][1]);
+							if(thing[element][2] !== undefined){
+								currentNode.children.push(new node(currentNode,"falseBranch",[]));
+								currentNode = currentNode.children[currentNode.children.length-1];
+								process(thing[element][2]);
+							}
+							currentNode = currentNode.parent;
+							continue;
+						}
+						/*loop*/
+						else if(thing[element][0].includes("for")){
+							currentNode.children.push(new node(currentNode,"loop",[]));
+						}
+						/*assignment*/
+						else{
+							currentNode.children.push(new node(currentNode,"assignment",[]));
+							currentNode = currentNode.children[currentNode.children.length-1];
+							insideOfAssignment = true;
+							process(thing[element]);
+							insideOfAssignment = false;
+							continue;
+						}
+					}
+					else{
+						currentNode.children.push(new node(currentNode,"array",[]));
+					}
+					currentNode = currentNode.children[currentNode.children.length-1];
+					process(thing[element]);
+				}
+				else{
+					if(thing[element]["for"] != undefined){
+						currentNode.children.push(new node(currentNode,"for",[]));
+					}
+					else if(thing[element]["bits"] != undefined){
+						
+						currentNode.children.push(new node(currentNode,"bits",[]));
+					}
+					else{
+						currentNode.children.push(new node(currentNode,"object",[]));
+					}
+					currentNode = currentNode.children[currentNode.children.length-1]
+					process(thing[element]);
+					
+				}
+				
+			}
+			else if(typeof(thing[element]) === typeof("")){
+				/*skip*/
+				if(element === "" || element.startsWith('!') && element.endsWith('!')){
+					currentNode.children.push(new node(currentNode,"skip",[]))
+					currentNode.children[currentNode.children.length-1].dataType = thing[element];
+					continue;
+				}
+				/*assignment*/
+				if(insideOfAssignment){
+					currentNode.children.push(new node(currentNode,"to",[]));
+					let tmp = currentNode;
+					currentNode = currentNode.children[currentNode.children.length-1];
+					let tmpObj = {};
+					tmpObj[thing[0]] = "destination";
+					insideOfAssignment = false;
+					process(tmpObj);
+					currentNode = tmp;
+				}
+				/*read*/
+				else{
+					/*varible*/
+					if(element.startsWith('#') && element.endsWith('#')){
+						currentNode.children.push(new node(currentNode,"varible",[]));
+						currentNode.children[currentNode.children.length-1].dataType = thing[element];
+						currentNode.children[currentNode.children.length-1].name = element.substring(1,element.length-1);
+					}
+					/*field*/
+					else{
+						if(element === "for"){
+							currentNode.brakets = thing[element];
+						}
+						else if(element === "bits"){
+							currentNode.dataType = thing[element];
+						}
+						else{
+							if(nameDict.has(thing[element])){
+								currentNode.children.push(new node(currentNode,"field",[]))
+								currentNode.children[currentNode.children.length-1].dataType = thing[element];
+							}
+							else{
+								if(currentNode.type !== "assignment" && currentNode.type !== "to"){
+									currentNode.children.push(new node(currentNode,"stringField",[]))
+								}	
+								else{
+									currentNode.children.push(new node(currentNode,"string",[]))
+								}
+								currentNode.children[currentNode.children.length-1].value = thing[element];
+							}
+							currentNode.children[currentNode.children.length-1].name = element;
+						}
+					}
+				}	
+			}
+			else if(typeof(thing[element]) === typeof(true)){
+				if(currentNode.type !== "assignment" && currentNode.type !== "to"){
+					currentNode.children.push(new node(currentNode,"booleanField",[]))
+				}
+				else{
+					currentNode.children.push(new node(currentNode,"boolean",[]))
+				}
+				currentNode.children[currentNode.children.length-1].value = thing[element];
+				currentNode.children[currentNode.children.length-1].name = element;
+				
+			}
+			else if(typeof(thing[element]) === typeof(1)){
+				if(currentNode.type !== "assignment" && currentNode.type !== "to"){
+					currentNode.children.push(new node(currentNode,"numberField",[]))
+				}
+				else{
+					currentNode.children.push(new node(currentNode,"number",[]))
+				}
+				currentNode.children[currentNode.children.length-1].value = thing[element];
+				currentNode.children[currentNode.children.length-1].name = element;
+			}
+			else{
+				error("Unknown type:"+typeof(element))
+			}
+		}
+		if(currentNode.parent !==  undefined){
+			currentNode = currentNode.parent;
+		}
+	}
+	function del(obj){
+		if(typeof(obj) != typeof({})){ return;}
+		delete obj.parent;
+		if(obj instanceof Object){
+			for(f in obj){
+				del(obj[f])
+			}
+		}
+		if(obj instanceof Array){
+			for(f of obj){
+				del(obj[f])
+			}
+		}
+	return obj;
+	}
+	let result = [];
+	let varibles = new Set();
+	const templates = new Map(
+		[
+		["root",[
+`function conv(data){
+var obj = {};
+@header@
+var dv = new DataView(data.buffer) 
+var byteCounter = 0;
+var bitsBuffer;
+function getBit(bit){
+  return ( bitsBuffer & (1<<bit) )>>bit
+}
+function bitsBegin(type,le,size){
+	bitsBuffer = dv[type](byteCounter,le);
+	byteCounter += size;
+}
+function readField(type,le,size){
+	var tmp = dv[type](byteCounter,le);
+	byteCounter += size;
+	return tmp;
+}
+`,"return obj;}",undefined]],
+		["field",["","",(o)=>{
+			if(o.dataType != "destination"){
+				return `obj.${o.name} = readField(${nameToParams(o.dataType)});\n`
+			}
+			else{
+				return `${o.name} = `
+			}
+			}]],
+		["skip",["",";\n",(o)=>{
+			if(nameDict.has(o.dataType)){
+				return `readField(${nameToParams(o.dataType)})`;
+			}
+			else{
+				return o.dataType;
+			}
+		}]],
+		["bits",["bitsBegin","",(o)=>{return `(${nameToParams(o.dataType)});\n`}]],
+		["booleanField",["","",(o)=>{return `obj.${o.name} = ${o.value};\n`}]],
+		["numberField",["","",(o)=>{return `obj.${o.name} = ${o.value};\n`}]],
+		["if",["if","",undefined]],
+		["condition",["(",")",(o)=>{return `${o.condition}`}]],
+		["trueBranch",["{\n","}\n",undefined]],
+		["assignment",["","",undefined]],
+		["to",["","",undefined]],
+		["boolean",["",";\n",(o)=>{return `${o.value}`}]],
+		["number",["",";\n",(o)=>{return `${o.value}`}]],
+		["string",["","",(o)=>{
+			if(o.value === "destination"){
+				return `obj.${o.name} = `;
+			}
+			else{
+				return `\"${o.value}\";\n`
+			}
+			}]],
+		["stringField",["","",(o)=>{
+			if(nameDict.has(o.value.split("/")[0])){
+				return `obj.${o.name} = readField(${nameToParams(o.value)});\n`
+			}
+			else{
+				return `obj.${o.name} = "${o.value}";\n`
+			}		
+		}]],
+		["varible",["","",(o)=>{
+			if(o.dataType != "destination"){
+				if(!varibles.has(o.name)){
+					varibles.add(o.name);
+				}
+				if(nameDict.has(o.dataType.split("/")[0])){
+					return `${o.name} = readField(${nameToParams(o.dataType)});\n`
+				}
+				else{
+					return `${o.name} = "${o.dataType}";\n`
+				}
+				
+			}
+			else{
+				return `${o.name} = `
+			}
+			}]],
+		["for",["for","}",(o)=>{return `(${o.brakets}){\n`}]],
+		["falseBranch",["else{\n","}\n",undefined]]
+		]
+		);
+	function iterate(obj){
+		if(typeof(obj) != typeof({})){ return;}
+		if(templates.has(obj.type)){
+			result.push(templates.get(obj.type)[0]);
+			if(templates.get(obj.type)[2] !== undefined){
+				result.push(templates.get(obj.type)[2](obj));
+			}
+		}
+		if(obj instanceof Object){
+			for(f in obj){
+				if(f === "parent"){continue}
+				iterate(obj[f])
+			}
+		}
+		if(obj instanceof Array){
+			for(f of obj){
+				if(f === "parent"){continue}
+				iterate(obj[f])
+			}
+		}
+	if(templates.has(obj.type)){
+			if(templates.get(obj.type)[3] !== undefined){
+				result.push(templates.get(obj.type)[3](obj));
+			}
+			result.push(templates.get(obj.type)[1]);
+		}
+	return obj;
+	}
+	process(json);
+	console.log(ast)
+	iterate(ast);
+	let resultString =  result.join("");
+	let variblesString = "";
+	let v = [];
+	for(elem of varibles){
+		v.push(`var ${elem};`);
+	}
+	variblesString = v.join("");
+	resultString = resultString.replace("@header@",variblesString)
+	document.getElementById("js").value = resultString;
+	function run(){
+		'use strict';
+		const data = fromHexString(document.getElementById("data").value);
+		const func = document.getElementById("js").value + ";conv(data);";
+
+		document.getElementById("output").innerHTML = JSON.stringify(eval(func));
+	}
+	run();
+}
+
+</script>
+</body>
+</html>
