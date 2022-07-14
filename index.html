@@ -33,7 +33,35 @@
 <button id="button" onclick="convert_and_run()">Сконвертировать и запустить</button>
 <div><b>Output:</b></div>
 <div id="output"></div>
-<div><b>Инструкция:</b></div>
+<div><b>Инструкция:</b><br>
+Считывание значения в поле объекта. "<название поля объекта>" : "<тип>" <br>
+Поддерживаемые типы: uint8, bigInt64, bigUint64, float32, float64, int16, int32, int8, uint16, uint32 <br>
+Если название начинается и заканчивается с !, то прочтение происходит в никуда.<br>
+Если название начинается и заканчивается с # чтение происходит в переменную <br>
+Если тип больше 1 байта(т.е. цифра в конце больше 8) то после названия должна идти черта с обозначением endian-а<br>
+int16/le - int16 little endian <br>
+int16/be - int16 big endian <br>
+Если название пустое(т.е. "") то происходит чтение в никуда <br>
+Пример вставки кода: "!<уникальный текст>!":"<код>" <br>
+<br>
+Внутри вставок кода взаимодействие с считаными полями происходит с помощью obj.<название поля>, а с переменными <название переменной> <br>
+<br>
+Для чтения бит используется следующий синтаксис {"bits":"<тип>",<дальнейшие комамнды>}<br>
+После этого в вставках кода можно использовать функцию getBit(<номер бита справо>)<br>
+<br>
+Синтакс конструкции если.<br>
+"":["<Условие>",[[<Если истина>],[Если лож]]] <br>
+<br>
+Цикл for <br>
+"":{"for":"<условие>",<тело цикла>} <br>
+<br>
+Можно читать текст в вставках кода. Например "":"obj.text = readText(10)" <br>
+Синтаксис readText(<длина текста>,<опционально кодировка. Стандартная utf8>) <br>
+Список кодировок https://developer.mozilla.org/en-US/docs/Web/API/Encoding_API/Encodings <br>
+<br>
+Присваивание значение полю ["<имя поля>","<значение>"] <br>
+Присваивание значение переменной ["#<имя переменной>#","<значение>"] <br>
+</div>
 <script>
 	document.getElementById('json').addEventListener('keydown', function(e) {
   if (e.key == 'Tab') {
@@ -178,7 +206,15 @@ function convert_and_run(){
 					process(thing[element]);
 				}
 				else{
-					if(thing[element]["for"] != undefined){
+					if(thing[element]["text"] != undefined){
+						currentNode.children.push(new node(currentNode,"text",[]));
+						let n = currentNode.children[currentNode.children.length-1];
+						n.brakets = thing[element]["text"];
+						if(thing[element]["encoding"] != undefined){
+							n.encoding = thing[element]["encoding"];
+						}
+					}
+					else if(thing[element]["for"] != undefined){
 						currentNode.children.push(new node(currentNode,"for",[]));
 					}
 					else if(thing[element]["bits"] != undefined){
@@ -313,6 +349,16 @@ function readField(type,le,size){
 	var tmp = dv[type](byteCounter,le);
 	byteCounter += size;
 	return tmp;
+}
+function readText(length,encoding){
+	let arr = new Uint8Array(data.buffer,byteCounter,length);
+	byteCounter += length;
+	if(encoding != undefined){
+		return new TextDecoder(encoding).decode(arr);
+	}
+	else{
+		return new TextDecoder().decode(arr);
+	}
 }
 `,"return obj;}",undefined]],
 		["field",["","",(o)=>{
